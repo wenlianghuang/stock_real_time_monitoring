@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { AlertRule } from '../storage'
+import { displayPrice } from '../displayPrice'
 import type { QuoteState } from '../types'
 
 export function AlertsPanel({
@@ -17,7 +18,8 @@ export function AlertsPanel({
   const [value, setValue] = useState<string>('0')
 
   const currentSymbol = symbol ?? ''
-  const currentPrice = currentSymbol ? quotes[currentSymbol]?.lastPrice : undefined
+  const q = currentSymbol ? quotes[currentSymbol] : undefined
+  const currentPrice = q ? displayPrice(q) : undefined
 
   const rows = useMemo(() => rules.slice().sort((a, b) => a.symbol.localeCompare(b.symbol)), [rules])
 

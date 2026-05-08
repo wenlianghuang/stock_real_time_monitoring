@@ -48,10 +48,12 @@ func main() {
 			Symbols:  splitCSV(fugleSymbols),
 			Channel:  "aggregates",
 		})
-		// On any subscribe, bootstrap missing symbols via REST so UI can show last snapshot out-of-session.
+		// On any client subscribe, bootstrap via REST (for fast snapshot) and also
+		// request streaming subscription so the symbol starts updating in-session.
 		go func() {
 			for syms := range hub.SubscribeEvents() {
 				p.BootstrapMissing(ctx, st, syms)
+				p.Subscribe(syms)
 			}
 		}()
 		runProvider = p.Run

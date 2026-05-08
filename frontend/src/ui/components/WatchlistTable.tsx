@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { displayPrice } from '../displayPrice'
 import type { QuoteState, SparkPoint } from '../types'
 import { Sparkline } from './Sparkline'
 
@@ -38,8 +39,8 @@ export function WatchlistTable({
         return dir * a.symbol.localeCompare(b.symbol)
       }
       if (sortKey === 'lastPrice') {
-        av = a.lastPrice
-        bv = b.lastPrice
+        av = displayPrice(a)
+        bv = displayPrice(b)
       }
       if (sortKey === 'changePct') {
         av = a.changePct
@@ -66,7 +67,7 @@ export function WatchlistTable({
               </th>
               <th>名稱</th>
               <th className="clickable" onClick={() => onSort('lastPrice')}>
-                成交 {sortKey === 'lastPrice' ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                價格 {sortKey === 'lastPrice' ? (sortDir === 'asc' ? '▲' : '▼') : ''}
               </th>
               <th className="clickable" onClick={() => onSort('changePct')}>
                 漲跌(%) {sortKey === 'changePct' ? (sortDir === 'asc' ? '▲' : '▼') : ''}
@@ -85,7 +86,7 @@ export function WatchlistTable({
                 <tr key={q.symbol} className={isSel ? 'rowSelected' : ''} onClick={() => onSelect(q.symbol)}>
                   <td>{q.symbol}</td>
                   <td>{q.name}</td>
-                  <td>{q.lastPrice.toFixed(1)}</td>
+                  <td>{displayPrice(q).toFixed(1)}</td>
                   <td className={up ? 'pos' : 'neg'}>
                     {q.change.toFixed(1)} ({(q.changePct * 100).toFixed(2)}%)
                   </td>
