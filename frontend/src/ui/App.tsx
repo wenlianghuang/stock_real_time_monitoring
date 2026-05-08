@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { WSClient } from './wsClient'
 import { loadAlertRules, loadWatchlist, saveAlertRules, saveWatchlist } from './storage'
+import { displayPrice, isShowingPrevCloseFallback } from './displayPrice'
 import { useUIStore } from './store'
 import { WatchlistTable } from './components/WatchlistTable'
 import { OrderBook5 } from './components/OrderBook5'
@@ -149,8 +150,11 @@ export function App() {
                   <div className="kpiValue">{selected.name}</div>
                 </div>
                 <div>
-                  <div className="kpiLabel">成交</div>
-                  <div className="kpiValue">{selected.lastPrice.toFixed(1)}</div>
+                  <div className="kpiLabel">價格</div>
+                  <div className="kpiValue">{displayPrice(selected).toFixed(1)}</div>
+                  {isShowingPrevCloseFallback(selected) ? (
+                    <div style={{ fontSize: 11, opacity: 0.75, marginTop: 4 }}>尚無成交，為昨收參考</div>
+                  ) : null}
                 </div>
                 <div>
                   <div className="kpiLabel">漲跌幅</div>

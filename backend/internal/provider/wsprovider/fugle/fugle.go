@@ -34,6 +34,10 @@ type Provider struct {
 	cfg Config
 	restBase string
 	http     *http.Client
+
+	desiredMu sync.RWMutex
+	desired   map[string]struct{}
+	subReq    chan []string
 }
 
 func New(cfg Config) *Provider {
@@ -48,11 +52,48 @@ func New(cfg Config) *Provider {
 		cfg.APIKey = strings.Join(strings.Fields(cfg.APIKey), "")
 	}
 	cfg.Symbols = normalizeSymbols(cfg.Symbols)
-	return &Provider{
+	p := &Provider{
 		cfg:      cfg,
 		restBase: defaultRESTBase,
 		http:     &http.Client{Timeout: 10 * time.Second},
 	}
+	p.desired = make(map[string]struct{}, len(cfg.Symbols)+16)
+	for _, s := range cfg.Symbols {
+		p.desired[s] = struct{}{}
+	}
+	p.subReq = make(chan []string, 256)
+	return p
+}
+
+// Subscribe requests streaming updates for additional symbols.
+// It is safe to call at any time; the provider will subscribe when connected/in-session.
+func (p *Provider) Subscribe(symbols []string) {
+	symbols = normalizeSymbols(symbols)
+	if len(symbols) == 0 {
+		return
+	}
+
+	p.desiredMu.Lock()
+	for _, s := range symbols {
+		p.desired[s] = struct{}{}
+	}
+	p.desiredMu.Unlock()
+
+	select {
+	case p.subReq <- symbols:
+	default:
+		// best-effort: drop if busy; desired set is still updated
+	}
+}
+
+func (p *Provider) desiredSymbols() []string {
+	p.desiredMu.RLock()
+	out := make([]string, 0, len(p.desired))
+	for s := range p.desired {
+		out = append(out, s)
+	}
+	p.desiredMu.RUnlock()
+	return out
 }
 
 func (p *Provider) Run(ctx context.Context, st *state.Store) error {
@@ -165,8 +206,12 @@ func (p *Provider) BootstrapMissing(ctx context.Context, st *state.Store, symbol
 
 func (p *Provider) runOnce(ctx context.Context, st *state.Store) error {
 	dialer := websocket.Dialer{
-		Proxy:            http.ProxyFromEnvironment,
+		// Prefer direct connections; proxies can break WS frames in some environments.
+		Proxy:            nil,
 		HandshakeTimeout: 10 * time.Second,
+		// Some servers / clients (including common JS stacks) negotiate permessage-deflate by default.
+		// Enabling it improves interoperability.
+		EnableCompression: true,
 	}
 	conn, _, err := dialer.DialContext(ctx, p.cfg.URL, nil)
 	if err != nil {
@@ -175,9 +220,18 @@ func (p *Provider) runOnce(ctx context.Context, st *state.Store) error {
 	defer conn.Close()
 	log.Printf("fugle: ws connected")
 
+	// Diagnostics (kept lightweight):
+	// - If JSON decoding fails, log a truncated raw message.
+	// - Log the first few events to confirm liveness after auth.
+	loggedRaw := 0
+	loggedEvents := 0
+
 	readTimeout := 90 * time.Second
 	_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
-	conn.SetPongHandler(func(string) error {
+	var pongCount int64
+	conn.SetPongHandler(func(appData string) error {
+		pongCount++
+		// keep quiet; pongs are expected
 		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 		return nil
 	})
@@ -190,6 +244,35 @@ func (p *Provider) runOnce(ctx context.Context, st *state.Store) error {
 		return conn.WriteJSON(v)
 	}
 
+	// Tracks what we've already subscribed on this WS connection.
+	subscribed := make(map[string]struct{}, 256)
+	subscribeSymbols := func(symbols []string) error {
+		symbols = normalizeSymbols(symbols)
+		if len(symbols) == 0 {
+			return nil
+		}
+		newSyms := make([]string, 0, len(symbols))
+		for _, s := range symbols {
+			if _, ok := subscribed[s]; ok {
+				continue
+			}
+			subscribed[s] = struct{}{}
+			newSyms = append(newSyms, s)
+		}
+		if len(newSyms) == 0 {
+			return nil
+		}
+		log.Printf("fugle: ws subscribe add symbols=%v", newSyms)
+		// subscribe channel for multiple symbols (incremental)
+		return writeJSON(map[string]any{
+			"event": "subscribe",
+			"data": map[string]any{
+				"channel": p.cfg.Channel,
+				"symbols": newSyms,
+			},
+		})
+	}
+
 	// auth
 	if err := writeJSON(map[string]any{
 		"event": "auth",
@@ -200,7 +283,7 @@ func (p *Provider) runOnce(ctx context.Context, st *state.Store) error {
 	log.Printf("fugle: auth sent")
 
 	authOK := false
-	submitted := false
+	authedCh := make(chan struct{})
 
 	pingTicker := time.NewTicker(25 * time.Second)
 	defer pingTicker.Stop()
@@ -233,75 +316,109 @@ func (p *Provider) runOnce(ctx context.Context, st *state.Store) error {
 		}
 	}()
 
+	// Read pump: parse WS messages and update store.
+	errCh := make(chan error, 1)
+	go func() {
+		defer func() { errCh <- errors.New("fugle ws read loop exited") }()
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+
+			var env envelope
+			if err := json.Unmarshal(msg, &env); err != nil {
+				if loggedRaw < 5 {
+					raw := msg
+					if len(raw) > 512 {
+						raw = raw[:512]
+					}
+					log.Printf("fugle: ws json unmarshal error: %v raw=%q", err, string(raw))
+					loggedRaw++
+				}
+				continue
+			}
+
+			if loggedEvents < 10 && env.Event != "" {
+				log.Printf("fugle: ws recv event=%s channel=%s id=%s", env.Event, env.Channel, env.ID)
+				loggedEvents++
+			}
+
+			switch env.Event {
+			case "authenticated":
+				if !authOK {
+					log.Printf("fugle: authenticated")
+					authOK = true
+					close(authedCh)
+				}
+			case "error":
+				errCh <- errors.New("fugle ws error: " + env.DataMessage())
+				return
+			case "data":
+				if !authOK {
+					continue
+				}
+				if env.Channel != p.cfg.Channel {
+					continue
+				}
+				q, ok := mapAggregateToQuote(env.Data)
+				if ok {
+					dataCount++
+					if dataCount == 1 || dataCount%200 == 0 {
+						log.Printf("fugle: data received count=%d last=%s %.2f", dataCount, q.Symbol, q.LastPrice)
+					}
+					if q.Name == "" {
+						if name, ok := knownNames[q.Symbol]; ok {
+							q.Name = name
+						}
+					}
+					q.LastUpdateTs = domain.NowUnixMs()
+					st.UpsertQuote(q)
+				}
+			case "subscribed":
+				log.Printf("fugle: subscribed ok")
+			case "heartbeat":
+				// ignore
+			case "snapshot", "pong":
+				// ignore
+			default:
+				// ignore
+			}
+		}
+	}()
+
+	// Wait for authenticated (or fail fast) before subscribing.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	case <-time.After(10 * time.Second):
+		return errors.New("fugle ws auth timeout (no authenticated event)")
+	case <-authedCh:
+	}
+
+	// Initial subscribe: desired symbols (config + any already requested via Subscribe()).
+	if err := subscribeSymbols(p.desiredSymbols()); err != nil {
+		return err
+	}
+	log.Printf("fugle: subscribe channel=%s symbols=%v", p.cfg.Channel, p.desiredSymbols())
+
+	// Dynamic subscribe loop: when UI subscribes to more symbols, add them incrementally.
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		}
-
-		_, msg, err := conn.ReadMessage()
-		if err != nil {
+		case err := <-errCh:
 			return err
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
-
-		var env envelope
-		if err := json.Unmarshal(msg, &env); err != nil {
-			continue
-		}
-
-		switch env.Event {
-		case "authenticated":
-			log.Printf("fugle: authenticated")
-			authOK = true
-			if !submitted {
-				// subscribe channel for multiple symbols
-				if err := writeJSON(map[string]any{
-					"event": "subscribe",
-					"data": map[string]any{
-						"channel": p.cfg.Channel,
-						"symbols": p.cfg.Symbols,
-					},
-				}); err != nil {
-					return err
-				}
-				submitted = true
-				log.Printf("fugle: subscribe channel=%s symbols=%v", p.cfg.Channel, p.cfg.Symbols)
-			}
-		case "error":
-			return errors.New("fugle ws error: " + env.DataMessage())
-		case "data":
+		case syms := <-p.subReq:
 			if !authOK {
 				continue
 			}
-			if env.Channel != p.cfg.Channel {
-				continue
-			}
-			q, ok := mapAggregateToQuote(env.Data)
-			if ok {
-				dataCount++
-				if dataCount == 1 || dataCount%200 == 0 {
-					log.Printf("fugle: data received count=%d last=%s %.2f", dataCount, q.Symbol, q.LastPrice)
-				}
-				// fill name for some common symbols if provider omitted it
-				if q.Name == "" {
-					if name, ok := knownNames[q.Symbol]; ok {
-						q.Name = name
-					}
-				}
-				q.LastUpdateTs = domain.NowUnixMs()
-				st.UpsertQuote(q)
-			}
-		case "subscribed":
-			log.Printf("fugle: subscribed ok")
-		case "heartbeat":
-			// low-signal but useful for liveness
-			// log.Printf("fugle: heartbeat")
-		case "snapshot", "pong":
-			// ignore
-		default:
-			if env.Event != "" {
-				log.Printf("fugle: event=%s channel=%s id=%s", env.Event, env.Channel, env.ID)
+			if err := subscribeSymbols(syms); err != nil {
+				return err
 			}
 		}
 	}
