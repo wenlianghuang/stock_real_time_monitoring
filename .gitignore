@@ -6,6 +6,10 @@ frontend/node_modules
 frontend/dist
 fugle_test/node_modules
 
+# sqlite auth db (local)
+auth.db
+**/auth.db
+
 # go
 backend/*.exe
 backend/.idea
