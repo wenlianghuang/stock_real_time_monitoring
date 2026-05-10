@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { WSClient } from './wsClient'
 import { loadAlertRules, loadWatchlist, saveAlertRules, saveWatchlist } from './storage'
 import { displayPrice, isShowingPrevCloseFallback } from './displayPrice'
@@ -6,6 +6,7 @@ import { useUIStore } from './store'
 import { WatchlistTable } from './components/WatchlistTable'
 import { OrderBook5 } from './components/OrderBook5'
 import { AlertsPanel } from './components/AlertsPanel'
+import { LoginForm } from './components/LoginForm'
 
 function wsUrl() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -18,6 +19,25 @@ function wsUrl() {
 }
 
 export function App() {
+  const [sessionUser, setSessionUser] = useState<string | null>(() => sessionStorage.getItem('loginUsername'))
+
+  const handleLogout = () => {
+    sessionStorage.removeItem('loginUsername')
+    setSessionUser(null)
+  }
+
+  if (!sessionUser) {
+    return (
+      <div className="page loginPage">
+        <LoginForm onLoggedIn={setSessionUser} />
+      </div>
+    )
+  }
+
+  return <Dashboard sessionUser={sessionUser} onLogout={handleLogout} />
+}
+
+function Dashboard({ sessionUser, onLogout }: { sessionUser: string; onLogout: () => void }) {
   const {
     connected,
     statusMessage,
@@ -98,6 +118,10 @@ export function App() {
         <div className={`pill ${connected ? 'pillOk' : 'pillBad'}`}>{connected ? 'connected' : 'offline'}</div>
         <div style={{ opacity: 0.8, fontSize: 12 }}>{statusMessage ?? ''}</div>
         <div style={{ flex: 1 }} />
+        <div style={{ opacity: 0.85, fontSize: 12 }}>{sessionUser}</div>
+        <button type="button" onClick={onLogout}>
+          登出
+        </button>
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -107,7 +131,7 @@ export function App() {
         />
       </div>
     )
-  }, [connected, filter, setFilter, statusMessage])
+  }, [connected, filter, onLogout, sessionUser, setFilter, statusMessage])
 
   return (
     <div className="page">
@@ -118,7 +142,7 @@ export function App() {
             <SymbolAdd onAdd={addSymbol} />
             <div style={{ flex: 1 }} />
             {selectedSymbol ? (
-              <button onClick={() => removeSymbol(selectedSymbol)} className="danger">
+              <button type="button" onClick={() => removeSymbol(selectedSymbol)} className="danger">
                 移除選取
               </button>
             ) : null}
@@ -168,12 +192,7 @@ export function App() {
 
           <OrderBook5 book={selected?.book} />
 
-          <AlertsPanel
-            rules={alertRules}
-            quotes={quotes}
-            onChange={setAlertRules}
-            symbol={selectedSymbol}
-          />
+          <AlertsPanel rules={alertRules} quotes={quotes} onChange={setAlertRules} symbol={selectedSymbol} />
 
           <TriggeredPanel items={triggered} />
         </div>
@@ -188,6 +207,7 @@ function SymbolAdd({ onAdd }: { onAdd: (sym: string) => void }) {
     <div className="row">
       <input ref={inputRef} className="input" placeholder="加入代號 (e.g. 2603)" style={{ width: 220 }} />
       <button
+        type="button"
         onClick={() => {
           const v = inputRef.current?.value ?? ''
           onAdd(v)
@@ -238,4 +258,3 @@ function TriggeredPanel({
     </div>
   )
 }
-

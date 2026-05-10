@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"stock_record/backend/internal/agg"
+	"stock_record/backend/internal/authsrv"
 	"stock_record/backend/internal/provider/mockprovider"
 	"stock_record/backend/internal/provider/wsprovider/fugle"
 	"stock_record/backend/internal/state"
@@ -31,7 +33,14 @@ func main() {
 	providerName := envOr("PROVIDER", "mock")
 	fugleKey := os.Getenv("FUGLE_API_KEY")
 	fugleSymbols := envOr("FUGLE_SYMBOLS", "2330,2308,2317")
-	log.Printf("config: PROVIDER=%s FUGLE_SYMBOLS=%s", providerName, fugleSymbols)
+	authDSN := envOr("DATABASE_URL", "postgres://stockmon_app:devpass@localhost:5432/stockmon?sslmode=disable")
+	log.Printf("config: PROVIDER=%s FUGLE_SYMBOLS=%s DATABASE_URL=%s", providerName, fugleSymbols, redactDSN(authDSN))
+
+	authStore, err := authsrv.OpenMigrate(authDSN)
+	if err != nil {
+		log.Fatalf("auth db: %v", err)
+	}
+	defer authStore.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -44,9 +53,9 @@ func main() {
 	switch providerName {
 	case "fugle":
 		p := fugle.New(fugle.Config{
-			APIKey:   fugleKey,
-			Symbols:  splitCSV(fugleSymbols),
-			Channel:  "aggregates",
+			APIKey:  fugleKey,
+			Symbols: splitCSV(fugleSymbols),
+			Channel: "aggregates",
 		})
 		// On any client subscribe, bootstrap via REST (for fast snapshot) and also
 		// request streaming subscription so the symbol starts updating in-session.
@@ -97,6 +106,8 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	r.Post("/api/login", authStore.Login)
+	r.Post("/api/register", authStore.Register)
 	r.Get("/ws", hub.HandleWS)
 
 	srv := &http.Server{Addr: addr, Handler: r}
@@ -138,6 +149,17 @@ func envDurationOr(key string, def time.Duration) time.Duration {
 	return d
 }
 
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "***"
+	}
+	if u.User != nil {
+		u.User = url.UserPassword(u.User.Username(), "***")
+	}
+	return u.String()
+}
+
 func splitCSV(s string) []string {
 	parts := strings.Split(s, ",")
 	out := make([]string, 0, len(parts))
@@ -149,4 +171,3 @@ func splitCSV(s string) []string {
 	}
 	return out
 }
-

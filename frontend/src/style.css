@@ -8,6 +8,40 @@ body { margin: 0; }
 /* app layout */
 #app { min-height: 100vh; }
 .page { padding: 16px; }
+.loginPage { display: flex; align-items: center; justify-content: center; min-height: 70vh; }
+.loginCard { max-width: 380px; width: 100%; text-align: left; }
+.authTabs { display: flex; gap: 8px; margin-bottom: 6px; }
+.authTab {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.2);
+  color: rgba(255,255,255,0.75);
+  cursor: pointer;
+}
+.authTab:hover { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.92); }
+.authTabActive {
+  border-color: rgba(146,255,191,0.35);
+  background: rgba(146,255,191,0.1);
+  color: rgba(255,255,255,0.95);
+}
+.authHint { margin-top: 12px; font-size: 13px; opacity: 0.85; }
+.linkBtn {
+  margin-left: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #92ffbf;
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+}
+.linkBtn:hover { opacity: 0.9; }
+.fieldStack { display: flex; flex-direction: column; gap: 12px; }
+.fieldLabel { display: block; font-size: 13px; opacity: 0.9; }
+.loginError { color: #ff9aa5; font-size: 13px; margin-top: 10px; }
+.loginSuccess { color: #92ffbf; font-size: 13px; margin-top: 10px; }
 .topbar { display:flex; align-items:center; gap:12px; padding:12px 14px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.04); border-radius:12px; position:sticky; top:16px; backdrop-filter:blur(10px); z-index:10; }
 .brand { font-weight:800; letter-spacing:0.4px; }
 .pill { font-size:12px; padding:4px 8px; border-radius:999px; border:1px solid rgba(255,255,255,0.12); }
