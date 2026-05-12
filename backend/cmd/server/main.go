@@ -108,6 +108,10 @@ func main() {
 	})
 	r.Post("/api/login", authStore.Login)
 	r.Post("/api/register", authStore.Register)
+	r.Post("/api/password/reset", authStore.ResetPassword)
+	r.Get("/api/watchlist", authStore.GetWatchlist)
+	r.Post("/api/watchlist", authStore.AddWatchlist)
+	r.Delete("/api/watchlist", authStore.RemoveWatchlist)
 	r.Get("/ws", hub.HandleWS)
 
 	srv := &http.Server{Addr: addr, Handler: r}

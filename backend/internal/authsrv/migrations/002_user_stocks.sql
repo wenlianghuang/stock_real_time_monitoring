@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS user_stocks (
+	user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	symbol TEXT NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	PRIMARY KEY (user_id, symbol)
+);
+

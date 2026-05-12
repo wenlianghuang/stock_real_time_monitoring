@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { WSClient } from './wsClient'
-import { loadAlertRules, loadWatchlist, saveAlertRules, saveWatchlist } from './storage'
+import { loadAlertRules, saveAlertRules } from './storage'
 import { displayPrice, isShowingPrevCloseFallback } from './displayPrice'
 import { useUIStore } from './store'
 import { WatchlistTable } from './components/WatchlistTable'
@@ -62,15 +62,34 @@ function Dashboard({ sessionUser, onLogout }: { sessionUser: string; onLogout: (
   const clientRef = useRef<WSClient | null>(null)
 
   useEffect(() => {
-    const wl = loadWatchlist()
-    setWatchlist(wl)
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/watchlist?username=${encodeURIComponent(sessionUser)}`)
+        if (!res.ok) throw new Error(`watchlist status ${res.status}`)
+        const data = (await res.json()) as { symbols?: unknown }
+        const syms = Array.isArray(data.symbols) ? data.symbols.filter((x) => typeof x === 'string' && x.length > 0) : []
+        if (cancelled) return
+        setWatchlist(syms)
+        setSelectedSymbol(syms[0])
+      } catch {
+        if (cancelled) return
+        // fallback to a couple defaults if backend unavailable
+        const syms = ['2330', '2317']
+        setWatchlist(syms)
+        setSelectedSymbol(syms[0])
+      }
+    })()
+
     const rules = loadAlertRules()
     setAlertRules(rules)
-    setSelectedSymbol(wl[0])
-  }, [setAlertRules, setSelectedSymbol, setWatchlist])
+
+    return () => {
+      cancelled = true
+    }
+  }, [sessionUser, setAlertRules, setSelectedSymbol, setWatchlist])
 
   useEffect(() => {
-    saveWatchlist(watchlist)
     if (clientRef.current) {
       clientRef.current.send({ type: 'subscribe', symbols: watchlist })
     }
@@ -101,11 +120,21 @@ function Dashboard({ sessionUser, onLogout }: { sessionUser: string; onLogout: (
     const s = sym.trim()
     if (!s) return
     if (watchlist.includes(s)) return
+    void fetch('/api/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: sessionUser, symbol: s }),
+    })
     setWatchlist([s, ...watchlist])
     setSelectedSymbol(s)
   }
 
   const removeSymbol = (sym: string) => {
+    void fetch('/api/watchlist', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: sessionUser, symbol: sym }),
+    })
     const next = watchlist.filter((x) => x !== sym)
     setWatchlist(next)
     if (selectedSymbol === sym) setSelectedSymbol(next[0])
