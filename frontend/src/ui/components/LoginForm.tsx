@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 
-type Panel = 'login' | 'register'
+type Panel = 'login' | 'register' | 'reset'
 
 export function LoginForm({ onLoggedIn }: { onLoggedIn: (username: string) => void }) {
   const [panel, setPanel] = useState<Panel>('login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -15,6 +16,10 @@ export function LoginForm({ onLoggedIn }: { onLoggedIn: (username: string) => vo
     setPanel(next)
     setError(null)
     setSuccess(null)
+    if (next === 'reset') {
+      setPassword('')
+      setConfirmPassword('')
+    }
   }
 
   async function onLoginSubmit(e: FormEvent) {
@@ -93,6 +98,57 @@ export function LoginForm({ onLoggedIn }: { onLoggedIn: (username: string) => vo
     }
   }
 
+  async function onResetSubmit(e: FormEvent) {
+    e.preventDefault()
+    setError(null)
+    setSuccess(null)
+    if (password !== confirmPassword) {
+      setError('兩次輸入的密碼不一致')
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await fetch('/api/password/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), newPassword: password }),
+      })
+      let data: { ok?: boolean; error?: string } = {}
+      try {
+        data = (await res.json()) as typeof data
+      } catch {
+        // non-JSON body
+      }
+      if (!res.ok) {
+        if (res.status === 404 || data.error === 'user not found') {
+          setError('找不到此帳號')
+          return
+        }
+        setError(data.error ?? `無法更新密碼（${res.status}）`)
+        return
+      }
+      setSuccess('密碼已更新，請使用新密碼登入。')
+      setPassword('')
+      setConfirmPassword('')
+      setUsername('')
+      window.setTimeout(() => setMode('login'), 2000)
+    } catch {
+      setError('網路錯誤，請稍後再試')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const title =
+    panel === 'login' ? '登入' : panel === 'register' ? '建立新帳號' : '重設密碼'
+
+  const submitLoginOrRegister =
+    panel === 'login'
+      ? onLoginSubmit
+      : panel === 'register'
+        ? onRegisterSubmit
+        : onResetSubmit
+
   return (
     <div className="card loginCard">
       <div className="authTabs" role="tablist" aria-label="登入或註冊">
@@ -115,8 +171,8 @@ export function LoginForm({ onLoggedIn }: { onLoggedIn: (username: string) => vo
           註冊
         </button>
       </div>
-      <div className="cardTitle">{panel === 'login' ? '登入' : '建立新帳號'}</div>
-      <form onSubmit={panel === 'login' ? onLoginSubmit : onRegisterSubmit}>
+      <div className="cardTitle">{title}</div>
+      <form onSubmit={submitLoginOrRegister}>
         <div className="fieldStack">
           <label className="fieldLabel">
             帳號
@@ -131,21 +187,43 @@ export function LoginForm({ onLoggedIn }: { onLoggedIn: (username: string) => vo
             />
           </label>
           <label className="fieldLabel">
-            密碼
+            {panel === 'reset' ? '新密碼' : '密碼'}
             <input
               className="input"
               type="password"
-              autoComplete={panel === 'login' ? 'current-password' : 'new-password'}
+              autoComplete={
+                panel === 'login' ? 'current-password' : 'new-password'
+              }
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               style={{ width: '100%', marginTop: 6 }}
             />
           </label>
+          {panel === 'reset' ? (
+            <label className="fieldLabel">
+              確認新密碼
+              <input
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="••••••••"
+                style={{ width: '100%', marginTop: 6 }}
+              />
+            </label>
+          ) : null}
         </div>
         <div className="row" style={{ marginTop: 14 }}>
           <button type="submit" disabled={busy}>
-            {busy ? '處理中…' : panel === 'login' ? '登入' : '註冊'}
+            {busy
+              ? '處理中…'
+              : panel === 'login'
+                ? '登入'
+                : panel === 'register'
+                  ? '註冊'
+                  : '更新密碼'}
           </button>
         </div>
         <div className="authHint">
@@ -155,10 +233,21 @@ export function LoginForm({ onLoggedIn }: { onLoggedIn: (username: string) => vo
               <button type="button" className="linkBtn" onClick={() => setMode('register')}>
                 建立新帳號
               </button>
+              <span style={{ margin: '0 0.35em' }} aria-hidden />
+              <button type="button" className="linkBtn" onClick={() => setMode('reset')}>
+                忘記密碼？
+              </button>
+            </>
+          ) : panel === 'register' ? (
+            <>
+              已有帳號？
+              <button type="button" className="linkBtn" onClick={() => setMode('login')}>
+                返回登入
+              </button>
             </>
           ) : (
             <>
-              已有帳號？
+              想起密碼了？
               <button type="button" className="linkBtn" onClick={() => setMode('login')}>
                 返回登入
               </button>
